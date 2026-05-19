@@ -3,7 +3,9 @@
 #define REQUEST_MAX_LEN 2048
 #define PACKET_MAX_LEN 65535
 #define MAX_PATH_LEN 1024
-#define HTTPS_SUPPORTED 0
+
+#define MAX(x, y) ((x) < (y) ? (y) : (x))
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
 
 typedef struct st_wgetx_url_info_t {
   char *host;
@@ -12,3 +14,5 @@ typedef struct st_wgetx_url_info_t {
   unsigned long path_len;
   uint8_t is_secure;
 } wgetx_url_info_t;
+
+int download_page(wgetx_url_info_t *url_info, char *root_path);

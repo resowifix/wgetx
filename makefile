@@ -10,9 +10,9 @@ clean:
 	rm -f $(REBUILDABLES)
 
 $(LINK_TARGET) : $(OBJS)
-	cc -g -o $@ $^ 
+	cc -g -o $@ $^ -lssl -lcrypto
 
 %.o : %.c
-	cc -g  -Wall -o $@ -c $<
+	cc -g  -Wall -o $@ -c $< -lssl -lcrypto
 
 wgetx.o : wgetx.h
