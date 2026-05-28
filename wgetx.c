@@ -15,7 +15,7 @@
 
 #include "wgetx.h"
 
-static SSL_CTX *create_context() {
+static SSL_CTX *wgetx_create_context() {
   const SSL_METHOD *method;
   SSL_CTX *ctx;
 
@@ -31,7 +31,7 @@ static SSL_CTX *create_context() {
   return ctx;
 }
 
-static void configure_client_context(SSL_CTX *ctx) {
+static void wgetx_configure_client_context(SSL_CTX *ctx) {
   /*
    * Configure the client to abort the handshake if certificate verification
    * fails
@@ -50,40 +50,48 @@ static void configure_client_context(SSL_CTX *ctx) {
   }
 }
 
-void parse_url(char *url, unsigned long length, wgetx_url_info_t *url_info) {
+wgetx_url_info_t *wgetx_parse_url(char *url, unsigned long length) {
   assert(!url[length] && length == strnlen(url, length + 1));
+
+  wgetx_url_info_t *url_info = calloc(1, sizeof(wgetx_url_info_t));
+  char *url_start, *path_start;
 
   if (length > 7 && memcmp(url, "http://", 7) == 0) {
     url_info->is_secure = 0;
-    url_info->host = url + 7;
+    url_start = url + 7;
     url_info->path_len = url_info->host_len = length - 7;
   } else if (length > 8 && memcmp(url, "https://", 8) == 0) {
     url_info->is_secure = 1;
-    url_info->host = url + 8;
+    url_start = url + 8;
     url_info->path_len = url_info->host_len = length - 8;
   } else {
     url_info->is_secure = 1;
-    url_info->host = url;
+    url_start = url;
     url_info->path_len = url_info->host_len = length;
   }
 
-  url_info->path = url_info->host;
+  path_start = url_start;
 
-  while (*url_info->path && *url_info->path != '/') {
-    url_info->path++;
+  while (*path_start && *path_start != '/') {
+    path_start++;
     url_info->path_len--;
   }
 
   url_info->host_len -= url_info->path_len;
 
-  if (*url_info->path) {
-    *url_info->path = 0;
-    url_info->path++;
+  if (*path_start) {
+    *path_start = 0;
+    path_start++;
     url_info->path_len--;
   }
+
+  strncpy(url_info->host, url_start, url_info->host_len);
+  strncpy(url_info->path, path_start, url_info->path_len);
+
+  return url_info;
 }
 
-int save_file(FILE *file, char *data, ssize_t length, uint8_t is_chunked,
+int wgetx_save_file(FILE *file, char *data, ssize_t length, uint8_t is_chunked,
               ssize_t *chunk_remaining) {
 
   if (!length)
@@ -99,11 +107,10 @@ int save_file(FILE *file, char *data, ssize_t length, uint8_t is_chunked,
             return -1;
           }
           length = length - *chunk_remaining - 2;
-          data += *chunk_remaining +2;
+          data += *chunk_remaining + 2;
           *chunk_remaining = 0;
-          return save_file(file, data, length, is_chunked, chunk_remaining);
-        }
-        else {
+          return wgetx_save_file(file, data, length, is_chunked, chunk_remaining);
+        } else {
           fprintf(stderr, "Chunk format error\n");
           return -1;
         }
@@ -127,7 +134,7 @@ int save_file(FILE *file, char *data, ssize_t length, uint8_t is_chunked,
       return -1;
     }
     cur += 2;
-    return save_file(file, cur, length - (cur - data), is_chunked,
+    return wgetx_save_file(file, cur, length - (cur - data), is_chunked,
                      chunk_remaining);
   }
 
@@ -139,7 +146,7 @@ int save_file(FILE *file, char *data, ssize_t length, uint8_t is_chunked,
   return 0;
 }
 
-int parse_header_line(char **header, char **data) {
+int wgetx_parse_header_line(char **header, char **data) {
 
   if ((*header)[0] == '\r' && (*header)[1] == '\n') {
     *header += 2;
@@ -185,7 +192,7 @@ int parse_header_line(char **header, char **data) {
   return 1;
 }
 
-long parse_http_response(char *recv_data, ssize_t rcv_len, void *data,
+long wgetx_parse_http_response(char *recv_data, ssize_t rcv_len, void **data,
                          ssize_t *data_len, uint8_t *is_chunked) {
   char *cur;
   char *rep_code;
@@ -223,7 +230,7 @@ long parse_http_response(char *recv_data, ssize_t rcv_len, void *data,
 
   cur++;
 
-  while ((header_line = parse_header_line(&cur, &header_data))) {
+  while ((header_line = wgetx_parse_header_line(&cur, &header_data))) {
     switch (header_line) {
     case -1:
       return 1;
@@ -233,8 +240,7 @@ long parse_http_response(char *recv_data, ssize_t rcv_len, void *data,
     case 3:
       if (code / 100 != 3)
         break;
-      *(wgetx_url_info_t **)data = calloc(1, sizeof(wgetx_url_info_t));
-      parse_url(header_data, strlen(header_data), *(wgetx_url_info_t **)data);
+      *(wgetx_url_info_t **)data = wgetx_parse_url(header_data, strlen(header_data));
       *data_len = sizeof(wgetx_url_info_t);
       return 306;
     default:;
@@ -245,40 +251,56 @@ long parse_http_response(char *recv_data, ssize_t rcv_len, void *data,
   return code;
 }
 
-int http_get_request(wgetx_url_info_t *urlinfo, char *buf) {
+int wgetx_http_get_request(wgetx_url_info_t *urlinfo, char *buf) {
   return snprintf(buf, REQUEST_MAX_LEN - 1,
                   "GET /%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
                   urlinfo->path, urlinfo->host);
 }
 
-int download_page_s(wgetx_url_info_t *url_info, char *root_path) {
-  int ret;
+void wgetx_init_ctx(wgetx_cnx_ctx_t *ctx) {
+  ctx->request_len = 0;
+  ctx->request = ctx->file_path = ctx->answer = ctx->answer_ptr = NULL;
+  ctx->file = NULL;
+  ctx->fd = -1;
+}
+
+void wgetx_clean_ctx(wgetx_cnx_ctx_t *ctx) {
+  if (ctx->request) {
+    free(ctx->request);
+  }
+
+  if (ctx->file_path) {
+    free(ctx->file_path);
+  }
+
+  if (ctx->answer_ptr) {
+    free(ctx->answer_ptr);
+  }
+
+  if (ctx->file) {
+    fclose(ctx->file);
+  }
+
+  if (ctx->fd >= 0) {
+    close(ctx->fd);
+  }
+}
+
+int wgetx_prepare_socket(wgetx_url_info_t *url_info, char *root_path,
+                   wgetx_cnx_ctx_t *ctx) {
   struct addrinfo *addrinfo = NULL;
-  int request_len;
-  ssize_t answer_len;
-  long code;
-  uint8_t is_chunked = 0;
-  ssize_t chunk_remaining = 0;
+  int ret;
 
-  SSL_CTX *ssl_ctx = create_context();
-  SSL *ssl = NULL;
+  wgetx_init_ctx(ctx);
 
-  int fd = -1;
-  FILE *file = NULL;
+  ctx->file_path = calloc(strnlen(root_path, MAX_PATH_LEN) + url_info->path_len,
+                          sizeof(char));
+  ctx->request = calloc(REQUEST_MAX_LEN, sizeof(char));
+  ctx->answer_ptr = ctx->answer = calloc(PACKET_MAX_LEN, sizeof(char));
 
-  configure_client_context(ssl_ctx);
-
-  ssl = SSL_new(ssl_ctx);
-
-  char *file_path = calloc(
-      strnlen(root_path, MAX_PATH_LEN) + url_info->path_len, sizeof(char));
-  char *request = calloc(REQUEST_MAX_LEN, sizeof(char));
-  char *answer = calloc(PACKET_MAX_LEN, sizeof(char));
-  char *answer_ptr = answer;
-
-  if (!file_path || !request || !answer) {
+  if (!ctx->file_path || !ctx->request || !ctx->answer) {
     fprintf(stderr, "Allocation error\n");
-    return 1;
+    goto end;
   }
 
   if ((ret = getaddrinfo(url_info->host, url_info->is_secure ? "https" : "http",
@@ -289,43 +311,73 @@ int download_page_s(wgetx_url_info_t *url_info, char *root_path) {
     goto end;
   }
 
-  if ((request_len = http_get_request(url_info, request)) < 0) {
+  if ((ctx->request_len = wgetx_http_get_request(url_info, ctx->request)) < 0) {
     fprintf(stderr, "Request formation error : %d\n", ret);
     ret = 1;
     goto end;
   }
 
-  strncpy(file_path, root_path, strnlen(root_path, MAX_PATH_LEN));
+  strncpy(ctx->file_path, root_path, strnlen(root_path, MAX_PATH_LEN));
 
   if (url_info->path_len) {
-    memcpy(file_path + strlen(file_path), url_info->path,
-           MIN(strlen(file_path), MAX_PATH_LEN - strlen(root_path)));
+    memcpy(ctx->file_path + strlen(ctx->file_path), url_info->path,
+           MIN(strlen(ctx->file_path), MAX_PATH_LEN - strlen(root_path)));
   } else {
-    memcpy(file_path + strlen(file_path), "index.html",
-           MIN(11, MAX_PATH_LEN - strlen(file_path)));
+    memcpy(ctx->file_path + strlen(ctx->file_path), "index.html",
+           MIN(11, MAX_PATH_LEN - strlen(ctx->file_path)));
   }
 
-  if ((file = fopen(file_path, "w")) == NULL) {
-    fprintf(stderr, "Error while openning %s : %s\n", file_path,
+  if ((ctx->file = fopen(ctx->file_path, "w")) == NULL) {
+    fprintf(stderr, "Error while openning %s : %s\n", ctx->file_path,
             strerror(errno));
     ret = 1;
     goto end;
   }
 
-  if ((fd = socket(addrinfo->ai_family, SOCK_STREAM, 0)) < 0) {
+  if ((ctx->fd = socket(addrinfo->ai_family, SOCK_STREAM, 0)) < 0) {
     fprintf(stderr, "Invalid socket creation : %s\n", strerror(errno));
     ret = 1;
     goto end;
   };
 
-  if ((ret = connect(fd, addrinfo->ai_addr, addrinfo->ai_addrlen)) != 0) {
+  if ((ret = connect(ctx->fd, addrinfo->ai_addr, addrinfo->ai_addrlen)) != 0) {
     fprintf(stderr, "Impossible  to connect to remote host : %s\n",
             strerror(errno));
     ret = 1;
     goto end;
   }
 
-  if (!SSL_set_fd(ssl, fd)) {
+end:
+  if (addrinfo) {
+    freeaddrinfo(addrinfo);
+  }
+  if (ret) {
+    wgetx_clean_ctx(ctx);
+  }
+  return ret;
+}
+
+int wgetx_download_page_s(wgetx_url_info_t *url_info, char *root_path) {
+  int ret;
+  ssize_t answer_len, data_len;
+  long code;
+  uint8_t is_chunked = 0;
+  ssize_t chunk_remaining = 0;
+  wgetx_cnx_ctx_t ctx;
+  void *data;
+
+  SSL_CTX *ssl_ctx = wgetx_create_context();
+  SSL *ssl = NULL;
+
+  if (wgetx_prepare_socket(url_info, root_path, &ctx)) {
+    return 1;
+  }
+
+  wgetx_configure_client_context(ssl_ctx);
+
+  ssl = SSL_new(ssl_ctx);
+
+  if (!SSL_set_fd(ssl, ctx.fd)) {
     ERR_print_errors_fp(stderr);
     ret = 1;
     goto end;
@@ -341,11 +393,11 @@ int download_page_s(wgetx_url_info_t *url_info, char *root_path) {
 
   SSL_connect(ssl);
 
-  SSL_write(ssl, request, request_len);
+  SSL_write(ssl, ctx.request, ctx.request_len);
 
-  if ((answer_len = SSL_read(ssl, answer, PACKET_MAX_LEN)) > 0) {
-    switch ((code = parse_http_response(answer, answer_len, &answer,
-                                        &answer_len, &is_chunked)) /
+  if ((answer_len = SSL_read(ssl, ctx.answer, PACKET_MAX_LEN)) > 0) {
+    switch ((code = wgetx_parse_http_response(ctx.answer, answer_len, &data,
+                                        &data_len, &is_chunked)) /
             100) {
     case 1:
     case 3:
@@ -353,16 +405,11 @@ int download_page_s(wgetx_url_info_t *url_info, char *root_path) {
         SSL_shutdown(ssl);
         SSL_free(ssl);
         SSL_CTX_free(ssl_ctx);
-        free(request);
-        free(file_path);
-        close(fd);
-        fclose(file);
-        freeaddrinfo(addrinfo);
-        ret = ((wgetx_url_info_t *)answer)->is_secure
-                  ? download_page_s((wgetx_url_info_t *)answer, root_path)
-                  : download_page((wgetx_url_info_t *)answer, root_path);
-        free(answer_ptr);
-        return ret;
+        wgetx_clean_ctx(&ctx);
+        free(url_info);
+        return ((wgetx_url_info_t *)data)->is_secure
+                   ? wgetx_download_page_s((wgetx_url_info_t *)data, root_path)
+                   : wgetx_download_page((wgetx_url_info_t *)data, root_path);
       }
     case 4:
     case 5:
@@ -374,18 +421,19 @@ int download_page_s(wgetx_url_info_t *url_info, char *root_path) {
       ret = 1;
       goto end;
     }
-  } else if (answer_len < 0) {
+  } else if (data_len < 0) {
     fprintf(stderr, "Error while receiving data : %s\n", strerror(errno));
     ret = 1;
     goto end;
   }
 
-  while (answer_len > 0 && save_file(file, answer, answer_len, is_chunked,
-                                     &chunk_remaining) == 0) {
-    answer_len = SSL_read(ssl, answer, PACKET_MAX_LEN);
+  while (data_len > 0 && wgetx_save_file(ctx.file, (char *)data, data_len, is_chunked,
+                                   &chunk_remaining) == 0) {
+    data_len = SSL_read(ssl, ctx.answer_ptr, PACKET_MAX_LEN);
+    data = ctx.answer_ptr;
   }
 
-  if (answer_len < 0) {
+  if (data_len < 0) {
     fprintf(stderr, "Error while receiving data : %s\n", strerror(errno));
     ret = 1;
     goto end;
@@ -397,108 +445,42 @@ end:
     SSL_free(ssl);
   }
   SSL_CTX_free(ssl_ctx);
-  free(answer_ptr);
-  free(request);
-  free(file_path);
-  if (fd != -1)
-    close(fd);
-  if (file)
-    fclose(file);
-  if (addrinfo)
-    freeaddrinfo(addrinfo);
+  free(url_info);
+  wgetx_clean_ctx(&ctx);
   return ret;
 }
 
-int download_page(wgetx_url_info_t *url_info, char *root_path) {
-  int ret;
-  struct addrinfo *addrinfo = NULL;
-  int request_len;
-  ssize_t answer_len;
+int wgetx_download_page(wgetx_url_info_t *url_info, char *root_path) {
+  int ret = 0;
+  ssize_t answer_len, data_len;
   long code;
   uint8_t is_chunked = 0;
   ssize_t chunk_remaining = 0;
+  wgetx_cnx_ctx_t ctx;
+  void *data;
 
-  int fd = -1;
-  FILE *file = NULL;
-
-  char *file_path = calloc(
-      strnlen(root_path, MAX_PATH_LEN) + url_info->path_len, sizeof(char));
-  char *request = calloc(REQUEST_MAX_LEN, sizeof(char));
-  char *answer = calloc(PACKET_MAX_LEN, sizeof(char));
-  char *answer_ptr = answer;
-
-  if (!file_path || !request || !answer) {
-    fprintf(stderr, "Allocation error\n");
+  if (wgetx_prepare_socket(url_info, root_path, &ctx)) {
     return 1;
   }
 
-  if ((ret = getaddrinfo(url_info->host, url_info->is_secure ? "https" : "http",
-                         NULL, &addrinfo) != 0)) {
-    fprintf(stderr, "Name resolution error : %s\n",
-            ret != -1 ? gai_strerror(ret) : strerror(errno));
-    ret = 1;
-    goto end;
-  }
-
-  if ((request_len = http_get_request(url_info, request)) < 0) {
-    fprintf(stderr, "Request formation error : %d\n", ret);
-    ret = 1;
-    goto end;
-  }
-
-  strncpy(file_path, root_path, strnlen(root_path, MAX_PATH_LEN));
-
-  if (url_info->path_len) {
-    memcpy(file_path + strlen(file_path), url_info->path,
-           MIN(strlen(file_path), MAX_PATH_LEN - strlen(root_path)));
-  } else {
-    memcpy(file_path + strlen(file_path), "index.html",
-           MIN(11, MAX_PATH_LEN - strlen(file_path)));
-  }
-
-  if ((file = fopen(file_path, "w")) == NULL) {
-    fprintf(stderr, "Error while openning %s : %s\n", file_path,
-            strerror(errno));
-    ret = 1;
-    goto end;
-  }
-
-  if ((fd = socket(addrinfo->ai_family, SOCK_STREAM, 0)) < 0) {
-    fprintf(stderr, "Invalid socket creation : %s\n", strerror(errno));
-    ret = 1;
-    goto end;
-  };
-
-  if ((ret = connect(fd, addrinfo->ai_addr, addrinfo->ai_addrlen)) != 0) {
-    fprintf(stderr, "Impossible  to connect to remote host : %s\n",
-            strerror(errno));
-    ret = 1;
-    goto end;
-  }
-
-  if (send(fd, request, request_len, 0) < 0) {
+  if (send(ctx.fd, ctx.request, ctx.request_len, 0) < 0) {
     fprintf(stderr, "Impossible to send request : %s\n", strerror(errno));
     ret = 1;
     goto end;
   };
 
-  if ((answer_len = recv(fd, answer, PACKET_MAX_LEN, 0)) > 0) {
-    switch ((code = parse_http_response(answer, answer_len, &answer,
-                                        &answer_len, &is_chunked)) /
+  if ((answer_len = recv(ctx.fd, ctx.answer, PACKET_MAX_LEN, 0)) > 0) {
+    switch ((code = wgetx_parse_http_response(ctx.answer, answer_len, &data,
+                                        &data_len, &is_chunked)) /
             100) {
     case 1:
     case 3:
       if (code == 306) {
-        free(request);
-        free(file_path);
-        close(fd);
-        fclose(file);
-        freeaddrinfo(addrinfo);
-        ret = ((wgetx_url_info_t *)answer)->is_secure
-                  ? download_page_s((wgetx_url_info_t *)answer, root_path)
-                  : download_page((wgetx_url_info_t *)answer, root_path);
-        free(answer_ptr);
-        return ret;
+        wgetx_clean_ctx(&ctx);
+        free(url_info);
+        return ((wgetx_url_info_t *)data)->is_secure
+                   ? wgetx_download_page_s((wgetx_url_info_t *)data, root_path)
+                   : wgetx_download_page((wgetx_url_info_t *)data, root_path);
       }
     case 4:
     case 5:
@@ -510,33 +492,27 @@ int download_page(wgetx_url_info_t *url_info, char *root_path) {
       ret = 1;
       goto end;
     }
-  } else if (answer_len < 0) {
+  } else if (data_len < 0) {
     fprintf(stderr, "Error while receiving data : %s\n", strerror(errno));
     ret = 1;
     goto end;
   }
 
-  while (answer_len > 0 && save_file(file, answer, answer_len, is_chunked,
-                                     &chunk_remaining) == 0) {
-    answer_len = recv(fd, answer, PACKET_MAX_LEN, 0);
+  while (data_len > 0 && wgetx_save_file(ctx.file, data, data_len, is_chunked,
+                                   &chunk_remaining) == 0) {
+    data_len = recv(ctx.fd, ctx.answer_ptr, PACKET_MAX_LEN, 0);
+    data = ctx.answer_ptr;
   }
 
-  if (answer_len < 0) {
+  if (data_len < 0) {
     fprintf(stderr, "Error while receiving data : %s\n", strerror(errno));
     ret = 1;
     goto end;
   }
 
 end:
-  free(answer_ptr);
-  free(request);
-  free(file_path);
-  if (fd != -1)
-    close(fd);
-  if (file)
-    fclose(file);
-  if (addrinfo)
-    freeaddrinfo(addrinfo);
+  free(url_info);
+  wgetx_clean_ctx(&ctx);
   return ret;
 }
 
@@ -547,13 +523,12 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  char url[1024];
-  memset(url, 0, 1024);
-  strncpy(url, argv[1], 1023);
+  char url[MAX_URL_LEN];
+  memset(url, 0, MAX_URL_LEN);
+  strncpy(url, argv[1], MAX_URL_LEN);
 
-  wgetx_url_info_t url_info;
-  parse_url(url, strlen(url), &url_info);
+  wgetx_url_info_t *url_info = wgetx_parse_url(url, strlen(url));
 
-  return url_info.is_secure ? download_page_s(&url_info, "./")
-                            : download_page(&url_info, "./");
+  return url_info->is_secure ? wgetx_download_page_s(url_info, "./")
+                             : wgetx_download_page(url_info, "./");
 }
