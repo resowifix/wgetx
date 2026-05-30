@@ -1,6 +1,6 @@
-LINK_TARGET = wgetx
+LINK_TARGET = wgetx wgetx_rec
 
-OBJS = wgetx.o
+OBJS = wgetx.o setx.o wgetx_util.o wgetx_rec.o
 
 REBUILDABLES = $(OBJS) $(LINK_TARGET)
 
@@ -15,4 +15,10 @@ $(LINK_TARGET) : $(OBJS)
 %.o : %.c
 	cc -g  -Wall -o $@ -c $< -lssl -lcrypto
 
+setx.o : setx.h
+
+wgetx_util.o : wgetx.h setx.h
+
 wgetx.o : wgetx.h
+
+wgetx_rec.o : wgetx.h setx.h

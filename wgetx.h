@@ -1,3 +1,6 @@
+#include <stdint.h>
+#include <stdio.h>
+
 #define REQUEST_MAX_LEN 2048
 #define PACKET_MAX_LEN 65535
 #define MAX_PATH_LEN 1024
@@ -23,5 +26,9 @@ typedef struct st_wgetx_cnx_ctx_t {
   FILE *file;
   int fd;
 } wgetx_cnx_ctx_t;
+
+wgetx_url_info_t *wgetx_parse_url(char *url, unsigned long length);
+
+int wgetx_download_page_s(wgetx_url_info_t *url_info, char *root_path);
 
 int wgetx_download_page(wgetx_url_info_t *url_info, char *root_path);
