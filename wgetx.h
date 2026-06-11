@@ -1,10 +1,12 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define REQUEST_MAX_LEN 2048
+#define REQUEST_MAX_LEN 8000
 #define PACKET_MAX_LEN 65535
-#define MAX_PATH_LEN 1024
-#define MAX_URL_LEN 1024
+#define MAX_PATH_LEN 8000
+#define MAX_URL_LEN 8000
+
+#define URL_CHAR "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!*'();:@&=+$,/?#[]%_.~-"
 
 #define MAX(x, y) ((x) < (y) ? (y) : (x))
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
@@ -27,8 +29,14 @@ typedef struct st_wgetx_cnx_ctx_t {
   int fd;
 } wgetx_cnx_ctx_t;
 
+typedef int (*wgetx_data_processor_t)(const void *, size_t, FILE *, void *);
+
+int is_url_char(char c);
+
 wgetx_url_info_t *wgetx_parse_url(char *url, unsigned long length);
 
-int wgetx_download_page_s(wgetx_url_info_t *url_info, char *root_path);
+int wgetx_download_page_s(wgetx_url_info_t *url_info, char *root_path,
+                          wgetx_data_processor_t processor, void *processor_arg);
 
-int wgetx_download_page(wgetx_url_info_t *url_info, char *root_path);
+int wgetx_download_page(wgetx_url_info_t *url_info, char *root_path,
+                        wgetx_data_processor_t processor, void *processor_arg);

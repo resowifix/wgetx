@@ -13,6 +13,10 @@
 
 #include "wgetx.h"
 
+int wgetx_save_data(const void * data, size_t length, FILE*f, void * null) {
+  return fwrite(data, length, 1, f) == 1;
+}
+
 int main(int argc, char **argv) {
 
   if (argc != 2) {
@@ -26,6 +30,6 @@ int main(int argc, char **argv) {
 
   wgetx_url_info_t *url_info = wgetx_parse_url(url, strlen(url));
 
-  return url_info->is_secure ? wgetx_download_page_s(url_info, "./")
-                             : wgetx_download_page(url_info, "./");
+  return url_info->is_secure ? wgetx_download_page_s(url_info, "./", &wgetx_save_data, NULL)
+                             : wgetx_download_page(url_info, "./", &wgetx_save_data, NULL);
 }

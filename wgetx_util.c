@@ -14,7 +14,6 @@
 #include <openssl/err.h>
 
 #include "wgetx.h"
-#include "setx.h"
 
 static SSL_CTX *wgetx_create_context() {
   const SSL_METHOD *method;
@@ -51,10 +50,18 @@ static void wgetx_configure_client_context(SSL_CTX *ctx) {
   }
 }
 
+int is_url_char(char c) {
+  return strchr(URL_CHAR, c) != NULL;
+}
+
 wgetx_url_info_t *wgetx_parse_url(char *url, unsigned long length) {
   assert(!url[length] && length == strnlen(url, length + 1));
+  wgetx_url_info_t *url_info;
+  
+  if ((url_info = calloc(1, sizeof(wgetx_url_info_t))) == NULL) {
+    return NULL;
+  }
 
-  wgetx_url_info_t *url_info = calloc(1, sizeof(wgetx_url_info_t));
   char *url_start, *path_start;
 
   if (length > 7 && memcmp(url, "http://", 7) == 0) {
@@ -92,8 +99,9 @@ wgetx_url_info_t *wgetx_parse_url(char *url, unsigned long length) {
   return url_info;
 }
 
-int wgetx_save_file(FILE *file, char *data, ssize_t length, uint8_t is_chunked,
-                    ssize_t *chunk_remaining) {
+int wgetx_process_data(FILE *file, char *data, ssize_t length,
+                       uint8_t is_chunked, ssize_t *chunk_remaining,
+                       wgetx_data_processor_t processor, void *processor_arg) {
 
   if (!length)
     return 0;
@@ -103,21 +111,21 @@ int wgetx_save_file(FILE *file, char *data, ssize_t length, uint8_t is_chunked,
       if (length >= *chunk_remaining + 2) {
         if (data[*chunk_remaining] == '\r' &&
             data[*chunk_remaining + 1] == '\n') {
-          if (fwrite(data, *chunk_remaining, 1, file) != 1) {
+          if (processor(data, *chunk_remaining, file, processor_arg) != 1) {
             fprintf(stderr, "Error when writting %s\n", strerror(errno));
             return -1;
           }
           length = length - *chunk_remaining - 2;
           data += *chunk_remaining + 2;
           *chunk_remaining = 0;
-          return wgetx_save_file(file, data, length, is_chunked,
-                                 chunk_remaining);
+          return wgetx_process_data(file, data, length, is_chunked,
+                                    chunk_remaining, processor, processor_arg);
         } else {
           fprintf(stderr, "Chunk format error\n");
           return -1;
         }
       } else {
-        if (fwrite(data, length, 1, file) != 1) {
+        if (processor(data, length, file, processor_arg) != 1) {
           fprintf(stderr, "Error when writting %s\n", strerror(errno));
           return -1;
         }
@@ -136,11 +144,11 @@ int wgetx_save_file(FILE *file, char *data, ssize_t length, uint8_t is_chunked,
       return -1;
     }
     cur += 2;
-    return wgetx_save_file(file, cur, length - (cur - data), is_chunked,
-                           chunk_remaining);
+    return wgetx_process_data(file, cur, length - (cur - data), is_chunked,
+                              chunk_remaining, processor, processor_arg);
   }
 
-  if (fwrite(data, length, 1, file) != 1) {
+  if (processor(data, length, file, processor_arg) != 1) {
     fprintf(stderr, "Error when writting %s\n", strerror(errno));
     return -1;
   }
@@ -360,7 +368,8 @@ end:
   return ret;
 }
 
-int wgetx_download_page_s(wgetx_url_info_t *url_info, char *root_path) {
+int wgetx_download_page_s(wgetx_url_info_t *url_info, char *root_path,
+                          wgetx_data_processor_t processor, void *processor_arg) {
   int ret = 0;
   ssize_t answer_len, data_len;
   long code;
@@ -411,8 +420,10 @@ int wgetx_download_page_s(wgetx_url_info_t *url_info, char *root_path) {
         wgetx_clean_ctx(&ctx);
         free(url_info);
         return ((wgetx_url_info_t *)data)->is_secure
-                   ? wgetx_download_page_s((wgetx_url_info_t *)data, root_path)
-                   : wgetx_download_page((wgetx_url_info_t *)data, root_path);
+                   ? wgetx_download_page_s((wgetx_url_info_t *)data, root_path,
+                                           processor, processor_arg)
+                   : wgetx_download_page((wgetx_url_info_t *)data, root_path,
+                                         processor, processor_arg);
       }
     case 4:
     case 5:
@@ -430,8 +441,9 @@ int wgetx_download_page_s(wgetx_url_info_t *url_info, char *root_path) {
     goto end;
   }
 
-  while (data_len > 0 && wgetx_save_file(ctx.file, (char *)data, data_len,
-                                         is_chunked, &chunk_remaining) == 0) {
+  while (data_len > 0 &&
+         wgetx_process_data(ctx.file, (char *)data, data_len, is_chunked,
+                            &chunk_remaining, processor, processor_arg) == 0) {
     data_len = SSL_read(ssl, ctx.answer_ptr, PACKET_MAX_LEN);
     data = ctx.answer_ptr;
   }
@@ -453,7 +465,8 @@ end:
   return ret;
 }
 
-int wgetx_download_page(wgetx_url_info_t *url_info, char *root_path) {
+int wgetx_download_page(wgetx_url_info_t *url_info, char *root_path,
+                        wgetx_data_processor_t processor, void *processor_arg) {
   int ret = 0;
   ssize_t answer_len, data_len;
   long code;
@@ -482,8 +495,10 @@ int wgetx_download_page(wgetx_url_info_t *url_info, char *root_path) {
         wgetx_clean_ctx(&ctx);
         free(url_info);
         return ((wgetx_url_info_t *)data)->is_secure
-                   ? wgetx_download_page_s((wgetx_url_info_t *)data, root_path)
-                   : wgetx_download_page((wgetx_url_info_t *)data, root_path);
+                   ? wgetx_download_page_s((wgetx_url_info_t *)data, root_path,
+                                           processor, processor_arg)
+                   : wgetx_download_page((wgetx_url_info_t *)data, root_path,
+                                         processor, processor_arg);
       }
     case 4:
     case 5:
@@ -501,8 +516,9 @@ int wgetx_download_page(wgetx_url_info_t *url_info, char *root_path) {
     goto end;
   }
 
-  while (data_len > 0 && wgetx_save_file(ctx.file, data, data_len, is_chunked,
-                                         &chunk_remaining) == 0) {
+  while (data_len > 0 &&
+         wgetx_process_data(ctx.file, data, data_len, is_chunked,
+                            &chunk_remaining, processor, processor_arg) == 0) {
     data_len = recv(ctx.fd, ctx.answer_ptr, PACKET_MAX_LEN, 0);
     data = ctx.answer_ptr;
   }
