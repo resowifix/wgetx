@@ -36,10 +36,11 @@ typedef struct st_wgetx_downloader_args_t {
 } wgetx_downloader_args_t;
 
 typedef struct st_wgetx_processor_args_t {
-    int recursive_level;
-    char split_buffer[MAX_URL_LEN];
-    int len_buffered;
     wgetx_page_to_be_downloaded_t *pages;
+    char *root_path;
+    int recursive_level;
+    int len_buffered;
+    char split_buffer[MAX_URL_LEN];
 } wgetx_processor_args_t;
 
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -61,7 +62,7 @@ int wgetx_parse_href_url(char *byte, const char *last_byte, wgetx_page_to_be_dow
             **end = '"';
             return 0;
         }
-        if (!is_url_char(**end) || *end - byte > MAX_URL_LEN) {
+        if (!wgetx_is_url_char(**end) || *end - byte > MAX_URL_LEN) {
             free(*page);
             return -1;
         }
@@ -102,29 +103,18 @@ int wgetx_process_data(const void *data, size_t length, FILE *f, void *args)
 {
     wgetx_processor_args_t *processor_arg = args;
 
-    int chevron = 0;
-    int single_quote = 1;
-    int double_quote = 1;
-
     const char *segment_start = data;
     wgetx_page_to_be_downloaded_t *page;
+    char local_path[MAX_PATH_LEN];
     int ret;
-    char *end;
+    char *end, *cur;
+    char *last_byte = (char *)data + length;
 
-    for (char *cur = (char *)data; cur < (char *)data + length - 6; cur++) {
+    memcpy(processor_arg->split_buffer + processor_arg->len_buffered, data,
+            MIN(MAX_URL_LEN - processor_arg->len_buffered, length));
+    
+    for (cur = processor_arg->split_buffer; cur < processor_arg->split_buffer + processor_arg->len_buffered; cur++) {
         switch (*cur) {
-            case '<':
-                chevron++;
-                break;
-            case '>':
-                chevron--;
-                break;
-            case '"':
-                double_quote = !double_quote;
-                break;
-            case '\'':
-                single_quote = !single_quote;
-                break;
             case 'h':
                 if (!memcmp(cur, "href=\"", 6)) {
                     page = NULL;
@@ -134,22 +124,62 @@ int wgetx_process_data(const void *data, size_t length, FILE *f, void *args)
 
                         pthread_mutex_lock(&lock);
                         wgetx_insert_page(processor_arg->pages, page);
+                        wgetx_create_local_path(processor_arg->root_path, page->url_info->path,
+                                page->url_info->path_len, local_path);
                         pthread_mutex_unlock(&lock);
 
                         fwrite(segment_start, cur - segment_start + 6, 1, f);
                         fwrite(local_path, strlen(local_path), 1, f);
                         segment_start = cur = end;
                     } else if (ret == 1) {
-                        memcpy(processor_arg->split_buffer, cur, (char *)data + length - cur);
-                        processor_arg->len_buffered = (char *)data + length - cur;
-                        return fwrite(segment_start, cur - segment_start, 1, f) == 1;
+                        memcpy(processor_arg->split_buffer, cur, last_byte - cur);
+                        processor_arg->len_buffered = last_byte - cur;
+                        ret = fwrite(segment_start, last_byte - segment_start, 1, f) == 1;
+                        return ret && !fseek(f, cur - last_byte, SEEK_CUR);
                     } else if (ret == -1) {
                         continue;
                     }
                 }
+            default:
+                break;
         }
     }
-    return 0;
+
+    for (char *cur = (char *)data; cur < last_byte - 5; cur++) {
+        switch (*cur) {
+            case 'h':
+                if (!memcmp(cur, "href=\"", 6)) {
+                    page = NULL;
+
+                    if (!(ret = wgetx_parse_href_url(cur + 6, data + length, &page, &end))) {
+                        page->recursive_level = processor_arg->recursive_level + 1;
+
+                        pthread_mutex_lock(&lock);
+                        wgetx_insert_page(processor_arg->pages, page);
+                        wgetx_create_local_path(processor_arg->root_path, page->url_info->path,
+                                page->url_info->path_len, local_path);
+                        pthread_mutex_unlock(&lock);
+
+                        fwrite(segment_start, cur - segment_start + 6, 1, f);
+                        fwrite(local_path, strlen(local_path), 1, f);
+                        segment_start = cur = end;
+                    } else if (ret == 1) {
+                        memcpy(processor_arg->split_buffer, cur, last_byte - cur);
+                        processor_arg->len_buffered = last_byte - cur;
+                        ret = fwrite(segment_start, last_byte - segment_start, 1, f) == 1;
+                        return ret && !fseek(f, cur - last_byte, SEEK_CUR);
+                    } else if (ret == -1) {
+                        continue;
+                    }
+                }
+            default:
+                break;
+        }
+    }
+    memcpy(processor_arg->split_buffer, last_byte - 5, 5);
+    processor_arg->len_buffered = 5;
+    ret = fwrite(segment_start, last_byte - segment_start, 1, f) == 1;
+    return ret && !fseek(f, -5, SEEK_CUR);
 }
 
 void *wgetx_downloader(void *args)
@@ -157,6 +187,7 @@ void *wgetx_downloader(void *args)
     wgetx_downloader_args_t *downloader_args = (wgetx_downloader_args_t *)args;
 
     wgetx_processor_args_t processor_arg = {.pages = downloader_args->pages,
+            .root_path = downloader_args->root_path,
             .recursive_level = downloader_args->recursive_level,
             .len_buffered = 0};
 

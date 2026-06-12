@@ -52,9 +52,24 @@ static void wgetx_configure_client_context(SSL_CTX *ctx)
     }
 }
 
-int is_url_char(char c)
+int wgetx_is_url_char(char c)
 {
     return strchr(URL_CHAR, c) != NULL;
+}
+
+void wgetx_create_local_path(char *root_path, char *path, int path_len, char *local_path)
+{
+    memset(local_path, 0, MAX_PATH_LEN);
+
+    strncat(local_path, root_path, strnlen(root_path, MAX_PATH_LEN));
+
+    if (path_len) {
+        strncat(local_path, path, MIN(path_len, MAX_PATH_LEN - strnlen(root_path, MAX_PATH_LEN)));
+    } else {
+        strncat(local_path, "index.html", MAX_PATH_LEN - strnlen(root_path, MAX_PATH_LEN));
+    }
+
+    local_path[MAX_PATH_LEN - 1] = 0;
 }
 
 wgetx_url_info_t *wgetx_parse_url(char *url, unsigned long length)
@@ -271,7 +286,8 @@ int wgetx_http_get_request(wgetx_url_info_t *urlinfo, char *buf)
 void wgetx_init_ctx(wgetx_cnx_ctx_t *ctx)
 {
     ctx->request_len = 0;
-    ctx->request = ctx->file_path = ctx->answer = ctx->answer_ptr = NULL;
+    memset(ctx->file_path, 0, MAX_PATH_LEN);
+    ctx->request = ctx->answer = ctx->answer_ptr = NULL;
     ctx->file = NULL;
     ctx->fd = -1;
 }
@@ -280,10 +296,6 @@ void wgetx_clean_ctx(wgetx_cnx_ctx_t *ctx)
 {
     if (ctx->request) {
         free(ctx->request);
-    }
-
-    if (ctx->file_path) {
-        free(ctx->file_path);
     }
 
     if (ctx->answer_ptr) {
@@ -306,11 +318,10 @@ int wgetx_prepare_socket(wgetx_url_info_t *url_info, char *root_path, wgetx_cnx_
 
     wgetx_init_ctx(ctx);
 
-    ctx->file_path = calloc(strnlen(root_path, MAX_PATH_LEN) + url_info->path_len, sizeof(char));
     ctx->request = calloc(REQUEST_MAX_LEN, sizeof(char));
     ctx->answer_ptr = ctx->answer = calloc(PACKET_MAX_LEN, sizeof(char));
 
-    if (!ctx->file_path || !ctx->request || !ctx->answer) {
+    if (!ctx->request || !ctx->answer) {
         fprintf(stderr, "Allocation error\n");
         goto end;
     }
@@ -329,15 +340,7 @@ int wgetx_prepare_socket(wgetx_url_info_t *url_info, char *root_path, wgetx_cnx_
         goto end;
     }
 
-    strncpy(ctx->file_path, root_path, strnlen(root_path, MAX_PATH_LEN));
-
-    if (url_info->path_len) {
-        memcpy(ctx->file_path + strlen(ctx->file_path), url_info->path,
-                MIN(strlen(ctx->file_path), MAX_PATH_LEN - strlen(root_path)));
-    } else {
-        memcpy(ctx->file_path + strlen(ctx->file_path), "index.html",
-                MIN(11, MAX_PATH_LEN - strlen(ctx->file_path)));
-    }
+    wgetx_create_local_path(root_path, url_info->path, url_info->path_len, ctx->file_path);
 
     if ((ctx->file = fopen(ctx->file_path, "w")) == NULL) {
         fprintf(stderr, "Error while openning %s : %s\n", ctx->file_path, strerror(errno));

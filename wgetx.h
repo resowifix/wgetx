@@ -24,18 +24,20 @@ typedef struct st_wgetx_url_info_t {
 } wgetx_url_info_t;
 
 typedef struct st_wgetx_cnx_ctx_t {
-    int request_len;
-    char *request;
-    char *file_path;
+    char file_path[MAX_PATH_LEN];
     char *answer;
     char *answer_ptr;
     FILE *file;
+    char *request;
+    int request_len;
     int fd;
 } wgetx_cnx_ctx_t;
 
 typedef int (*wgetx_data_processor_t)(const void *, size_t, FILE *, void *);
 
-int is_url_char(char c);
+int wgetx_is_url_char(char c);
+
+void wgetx_create_local_path(char *root_path, char *path, int path_len, char *local_path);
 
 wgetx_url_info_t *wgetx_parse_url(char *url, unsigned long length);
 
